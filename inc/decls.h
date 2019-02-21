@@ -20,6 +20,7 @@
 
 #include "time.h"
 #include "../src/fatfs/ff.h"
+#include "da.h"
 #include "hxc.h"
 #include "util.h"
 #include "cancellation.h"
@@ -27,6 +28,7 @@
 #include "timer.h"
 #include "fs.h"
 #include "floppy.h"
+#include "volume.h"
 #include "config.h"
 
 #include "font.h"

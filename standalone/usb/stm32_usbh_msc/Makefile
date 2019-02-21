@@ -1,5 +1,3 @@
-RPATH = ../../../src/usb/stm32_usbh_msc
-
 OBJS += usb_core.o
 OBJS += usb_hcd.o
 OBJS += usb_hcd_int.o
@@ -11,4 +9,4 @@ OBJS += usbh_msc_core.o
 OBJS += usbh_msc_scsi.o
 OBJS += usbh_stdreq.o
 
-CFLAGS += -I$(ROOT)/src/usb/stm32_usbh_msc/inc/ -include usbh_conf.h
+CFLAGS += -Iinc/ -include usbh_conf.h

@@ -56,6 +56,8 @@ struct __packed ff_cfg {
 #define TWOBUTTON_eject       1
 #define TWOBUTTON_rotary      2
 #define TWOBUTTON_rotary_fast 3
+#define TWOBUTTON_mask        3
+#define TWOBUTTON_reverse     (1u<<7)
     uint8_t twobutton_action;
 #define NAVMODE_default 0
 #define NAVMODE_indexed 1
@@ -77,22 +79,28 @@ struct __packed ff_cfg {
 #define HOST_msx        10
 #define HOST_dec        11
 #define HOST_tandy_coco 12
+#define HOST_fluke      13
+#define HOST_kaypro     14
+#define HOST_nascom     15
+#define HOST_casio      16
     uint8_t host;
     /* Bitfields within display_type field. */
-#define DISPLAY_auto   0
-#define DISPLAY_lcd    (1<<0)
-#define DISPLAY_oled   (1<<1)
-#define DISPLAY_rotate (1<<2)
-#define DISPLAY_narrow (1<<3)
-#define DISPLAY_sh1106 (1<<4)
-#define DISPLAY_oled_64 (1<<5)
-#define _DISPLAY_lcd_columns 5
+#define DISPLAY_auto     0
+#define DISPLAY_lcd      (1<<0)
+#define DISPLAY_oled     (1<<1)
+#define DISPLAY_narrower (1<<0) /* only if DISPLAY_oled */
+#define DISPLAY_rotate   (1<<2) /* only if DISPLAY_oled */
+#define DISPLAY_narrow   (1<<3) /* only if DISPLAY_oled */
+#define DISPLAY_sh1106   (1<<4) /* only if DISPLAY_oled */
+#define DISPLAY_oled_64  (1<<5) /* only if DISPLAY_oled */
+#define _DISPLAY_lcd_columns 5 /* only if DISPLAY_lcd */
 #define DISPLAY_lcd_columns(x) ((x)<<_DISPLAY_lcd_columns)
     uint16_t display_type;
 #define ROT_none    0
 #define ROT_full    1
 #define ROT_half    3
 #define ROT_quarter 2
+#define ROT_reverse (1u<<7)
     uint8_t rotary;
     bool_t write_protect;
     uint16_t nav_scroll_rate;
@@ -112,6 +120,8 @@ struct __packed ff_cfg {
 #define PIN_ndens  (PIN_dens | PIN_invert)
 #define PIN_nchg   (PIN_chg | PIN_invert)
     uint8_t pin02, pin34;
+    uint8_t head_settle_ms;
+    uint8_t oled_contrast;
 };
 
 extern struct ff_cfg ff_cfg;

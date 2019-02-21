@@ -1,6 +1,7 @@
 RPATH = ../src
 
 OBJS += arena.o
+OBJS += build_info.o
 OBJS += cancellation.o
 OBJS += config.o
 OBJS += crc.o
@@ -10,12 +11,14 @@ OBJS += floppy.o
 OBJS += fpec.o
 OBJS += fs.o
 OBJS += main.o
+OBJS += sd_spi.o
 OBJS += spi.o
 OBJS += string.o
 OBJS += stm32f10x.o
 OBJS += time.o
 OBJS += timer.o
 OBJS += util.o
+OBJS += volume.o
 
 OBJS-$(debug) += console.o
 

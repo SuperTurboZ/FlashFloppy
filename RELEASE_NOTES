@@ -3,6 +3,80 @@
 ** Keir Fraser <keir.xen@gmail.com>
 ************************************
 
+** v1.0 - 4 February 2019
+ - Game/demo AutoSwap-disks feature
+   - No manual disk swapping, at all!
+   - Requires patching of host software titles
+   - Amiga titles so far (github:keirf/FF_AutoSwap):
+     - Beneath a Steel Sky
+     - Indiana Jones and the Fate of Atlantis
+     - The Secret of Monkey Island
+     - Monkey Island 2: LeChuck's Revenge
+ - FF.CFG: New OLED display-type sib-option "-narrower"
+   - 16-character-wide display (c.w. "-narrow" 18-char-wide)
+ - PC98: Direct support for HDM image files
+ - HxC Compat: Small fixes to Amiga file selector
+
+** v0.15 - 8 January 2019
+ - Support Enhanced Gotek with SD card connector
+   - Board requirements are in the wiki (Hardware Mods)
+   - USB drive, if inserted, takes priority over SD card
+   - SD card is not supported for firmware update
+
+** v0.14 - 7 December 2018
+ - Direct Access: Fix broken sector writes (USB corruption)
+   - Primarily affected the CPC/ST file selectors (not Amiga)
+   - Broken since v0.12
+
+** v0.13 - 2 December 2018
+ - IMG: Support Casio FZ-1 (host=casio)
+ - IMG: Support SC Prophet 3000 (host=akai)
+ - Display D-A/DA/"Host Direct Access" in host file selector
+
+** v0.12 - 27 November 2018
+ - IMG: Support Nascom 1 & 2 (host=nascom)
+ - Direct Access: Support FM/SD access on cylinder 254
+ - Direct Access: Support CMD_SELECT_IMAGE (cmd #4)
+ - HxC Compat: Fix occasional "LBA Change Test Failed" error
+ - Improvements to ribbon-upside-down checks
+
+** v0.11 - 1 November 2018
+ - Detect and report upside-down data ribbon cable
+ - FF.CFG: Configurable OLED brightness/contrast (oled-contrast=)
+ - FF.CFG: Configurable head settle time (head-settle-ms=)
+ - FF.CFG: Fix comma-separated-list parsing (eg. rotary=)
+
+** v0.10 - 30 October 2018
+ - FF.CFG: Allow up/down inputs to be reversed
+   - Reverse original two buttons (twobutton-action=reverse)
+   - Reverse rotary encoder direction (rotary=reverse)
+ - Modified version numbering scheme and remove alpha status
+
+** v0.9.31a - 28 October 2018
+ - HFE: Sanity-check critical header fields
+ - FF.CFG: Better docs on pin02/pin34 options
+ - HxC Compat: File selector updates
+
+** v0.9.30a - 9 October 2018
+ - TI99: Fix V9T9/DSK double-sided images
+ - HxC Compat: Enter slot-based mode even with no AUTOBOOT.HFE
+ - HFE: Support HFEv2 images
+
+** v0.9.29a - 17 September 2018
+ - New and improved image handlers:
+   - ST: Fix 80-cyl single-sided images
+   - IMG: Kaypro (host=kaypro)
+   - IMG: MSX fix 40-cyl/5.25" formats (host=msx)
+   - IMG: PC-DOS fix missing IAM (host=pc-dos)
+   - IMG: All: Support long sectors (>1024k)
+ - Indexed mode: Don't require DSKA0000 image
+
+** v0.9.28a - 26 August 2018
+ - New image types supported:
+   - IMG: Fluke 9100 (host=fluke)
+   - MBD: Spectrum MB02
+ - LCD/OLED: Display folder names in brackets
+
 ** v0.9.27a - 27 July 2018
  - Direct Navigation: Fix hidden-file and dot-file filtering
  - Direct Navigation: Filter __MACOSX/ resource-fork folders

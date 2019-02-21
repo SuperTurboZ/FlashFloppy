@@ -37,6 +37,7 @@ static struct {
     } stack[20];
     uint8_t depth;
     bool_t usb_power_fault;
+    uint8_t dirty_slot_nr:1;
     uint8_t hxc_mode:1;
     uint8_t ejected:1;
     uint8_t ima_ej_flag:1; /* "\\EJ" flag in IMAGE_A.CFG? */
@@ -67,6 +68,20 @@ static bool_t slot_valid(unsigned int i)
     if (i >= (sizeof(cfg.slot_map)*8))
         return FALSE;
     return !!(cfg.slot_map[i/8] & (0x80>>(i&7)));
+}
+
+uint16_t get_slot_nr(void)
+{
+    return cfg.slot_nr;
+}
+
+bool_t set_slot_nr(uint16_t slot_nr)
+{
+    if (!slot_valid(slot_nr))
+        return FALSE;
+    cfg.slot_nr = slot_nr;
+    cfg.dirty_slot_nr = TRUE;
+    return TRUE;
 }
 
 /* Turn the LCD backlight on, reset the switch-off handler and ticker. */
@@ -177,7 +192,10 @@ static void lcd_scroll_name(void)
 /* Write slot info to display. */
 static void display_write_slot(bool_t nav_mode)
 {
-    char msg[25], *type;
+    const struct image_type *type;
+    char msg[25], typename[4] = "";
+    unsigned int i;
+
     if (display_mode != DM_LCD_1602) {
         if (display_mode == DM_LED_7SEG)
             led_7seg_write_decimal(cfg.slot_nr);
@@ -201,38 +219,32 @@ static void display_write_slot(bool_t nav_mode)
         snprintf(msg, sizeof(msg), "%s", cfg.slot.name);
         lcd_write(0, 0, -1, msg);
     }
-    type = (cfg.slot.attributes & AM_DIR) ? "DIR"
-        : slot_type("adf") ? "ADF"
-        : slot_type("d81") ? "D81"
-        : slot_type("dsk") ? "DSK"
-        : slot_type("hfe") ? "HFE"
-        : slot_type("img") ? "IMG"
-        : slot_type("ima") ? "IMA"
-        : slot_type("st") ? "ST "
-        : slot_type("adl") ? "ADL"
-        : slot_type("adm") ? "ADM"
-        : slot_type("mbd") ? "MBD"
-        : slot_type("mgt") ? "MGT"
-        : slot_type("fdi") ? "FDI"
-        : slot_type("trd") ? "TRD"
-        : slot_type("opd") ? "OPD"
-        : slot_type("ssd") ? "SSD"
-        : slot_type("dsd") ? "DSD"
-        : slot_type("sdu") ? "SDU"
-        : slot_type("jvc") ? "JVC"
-        : slot_type("vdk") ? "VDK"
-        : slot_type("v9t9") ? "T99"
-        : "UNK";
-    snprintf(msg, sizeof(msg), "%03u/%03u%*s%s D:%u",
+
+    if (slot_type("v9t9")) {
+        snprintf(typename, sizeof(typename), "T99");
+    } else if (!(cfg.slot.attributes & AM_DIR)) {
+        for (type = &image_type[0]; type->handler != NULL; type++)
+            if (slot_type(type->ext))
+                break;
+        if (type->handler != NULL) {
+            snprintf(typename, sizeof(typename), "%s", type->ext);
+            for (i = 0; i < sizeof(typename); i++)
+                typename[i] = toupper(typename[i]);
+        }
+    }
+
+    snprintf(msg, sizeof(msg), "%03u/%03u%*s%3s D:%u",
              cfg.slot_nr, cfg.max_slot_nr,
              (lcd_columns > 16) ? 3 : 1, "",
-             type, cfg.depth);
+             typename, cfg.depth);
+
     if (cfg.hxc_mode) {
         /* HxC mode: Exclude depth from the info message. */
         char *p = strrchr(msg, 'D');
         if (p)
             *p = '\0';
     }
+
     lcd_write(0, 1, -1, msg);
     lcd_on();
 }
@@ -248,6 +260,12 @@ static void lcd_write_track_info(bool_t force)
         return;
 
     floppy_get_track(&cyl, &side, &sel, &writing);
+
+    if (cyl >= DA_FIRST_CYL) {
+        /* Display controlled by src/image/da.c */
+        return;
+    }
+
     cyl = min_t(uint8_t, cyl, 99);
     side = min_t(uint8_t, side, 1);
 
@@ -318,12 +336,18 @@ static void button_timer_fn(void *unused)
         [ROT_half]    = 0x24000018, /* 2 transitions (half cycle) per detent */
         [ROT_quarter] = 0x24428118  /* 1 transition (quarter cyc) per detent */
     };
+    const uint8_t rotary_reverse[] = {
+        [B_LEFT] = B_RIGHT, [B_RIGHT] = B_LEFT
+    };
 
-    static uint16_t bl, br, bs;
-    uint8_t b = 0;
+    static uint16_t _b[3]; /* 0 = left, 1 = right, 2 = select */
+    uint8_t b = 0, rb;
+    bool_t twobutton_rotary =
+        (ff_cfg.twobutton_action & TWOBUTTON_mask) == TWOBUTTON_rotary;
+    int i, twobutton_reverse = !!(ff_cfg.twobutton_action & TWOBUTTON_reverse);
 
     /* Check PA5 (USBFLT, active low). */
-    if ((board_id == BRDREV_Gotek_enhanced) && !gpio_read_pin(gpioa, 5)) {
+    if (gotek_enhanced() && !gpio_read_pin(gpioa, 5)) {
         /* Latch the error and disable USBENA. */
         cfg.usb_power_fault = TRUE;
         gpio_write_pin(gpioa, 4, HIGH);
@@ -331,26 +355,25 @@ static void button_timer_fn(void *unused)
 
     /* We debounce the switches by waiting for them to be pressed continuously 
      * for 16 consecutive sample periods (16 * 5ms == 80ms) */
+    for (i = 0; i < 3; i++) {
+        _b[i] <<= 1;
+        _b[i] |= gpio_read_pin(gpioc, 8-i);
+    }
 
-    bl <<= 1;
-    bl |= gpio_read_pin(gpioc, 8);
-    if (bl == 0)
-        b |= (ff_cfg.twobutton_action == TWOBUTTON_rotary)
-            ? B_LEFT|B_RIGHT : B_LEFT;
+    if (_b[twobutton_reverse] == 0)
+        b |= twobutton_rotary ? B_LEFT|B_RIGHT : B_LEFT;
 
-    br <<= 1;
-    br |= gpio_read_pin(gpioc, 7);
-    if (br == 0)
-        b |= (ff_cfg.twobutton_action == TWOBUTTON_rotary)
-            ? B_SELECT : B_RIGHT;
+    if (_b[!twobutton_reverse] == 0)
+        b |= twobutton_rotary ? B_SELECT : B_RIGHT;
 
-    bs <<= 1;
-    bs |= gpio_read_pin(gpioc, 6);
-    if (bs == 0)
+    if (_b[2] == 0)
         b |= B_SELECT;
 
     rotary = ((rotary << 2) | ((gpioc->idr >> 10) & 3)) & 15;
-    b |= (rotary_transitions[ff_cfg.rotary & 3] >> (rotary << 1)) & 3;
+    rb = (rotary_transitions[ff_cfg.rotary & 3] >> (rotary << 1)) & 3;
+    if (ff_cfg.rotary & ROT_reverse)
+        rb = rotary_reverse[rb];
+    b |= rb;
 
     b = lcd_handle_backlight(b);
 
@@ -477,6 +500,71 @@ static bool_t native_dir_next(void)
     return TRUE;
 }
 
+int set_slot_by_name(const char *name, void *scratch)
+{
+    bool_t ok;
+    int nr = -1;
+    int len = strnlen(name, 256);
+
+    fs = scratch; /* XXX not very tasty */
+
+    if (!cfg.hxc_mode) {
+
+        nr = cfg.depth ? 1 : 0;
+        F_opendir(&fs->dp, "");
+        while ((ok = native_dir_next()) && strncmp(fs->fp.fname, name, len))
+            nr++;
+        F_closedir(&fs->dp);
+        if (!ok || !set_slot_nr(nr))
+            nr = -1;
+
+    } else if (ff_cfg.nav_mode != NAVMODE_indexed) {
+
+        struct _hxc{
+            struct hxcsdfe_cfg cfg;
+            struct v1_slot v1_slot;
+            struct v2_slot v2_slot;
+        } *hxc = (struct _hxc *)&fs->dp; /* XXX also not nice */
+        struct slot *slot = (struct slot *)hxc;
+        
+        slot_from_short_slot(slot, &cfg.hxcsdfe);
+        fatfs_from_slot(&fs->file, slot, FA_READ);
+        F_read(&fs->file, &hxc->cfg, sizeof(hxc->cfg), NULL);
+        if (hxc->cfg.index_mode)
+            goto out;
+        for (nr = 1; nr <= cfg.max_slot_nr; nr++) {
+            if (!slot_valid(nr))
+                continue;
+            switch (hxc->cfg.signature[9]-'0') {
+            case 1:
+                F_lseek(&fs->file, 1024 + nr*128);
+                F_read(&fs->file, &hxc->v1_slot, sizeof(hxc->v1_slot), NULL);
+                memcpy(&hxc->v2_slot.type, &hxc->v1_slot.name[8], 3);
+                memcpy(&hxc->v2_slot.attributes, &hxc->v1_slot.attributes,
+                       1+4+4+17);
+                hxc->v2_slot.name[17] = '\0';
+                break;
+            case 2:
+                F_lseek(&fs->file, hxc->cfg.slots_position*512
+                    + nr*64*hxc->cfg.number_of_drive_per_slot);
+                F_read(&fs->file, &hxc->v2_slot, sizeof(hxc->v2_slot), NULL);
+                break;
+            }
+            if (!strncmp(hxc->v2_slot.name, name,
+                         min_t(int, len, sizeof(hxc->v2_slot.name))))
+                break;
+        }
+
+        if ((nr <= 0) || !set_slot_nr(nr))
+            nr = -1;
+
+    }
+
+out:
+    fs = NULL;
+    return nr;
+}
+
 /* Parse pinNN= config value. */
 static uint8_t parse_pin_str(const char *s)
 {
@@ -544,11 +632,15 @@ static void read_ff_cfg(void)
             ff_cfg.host =
                 !strcmp(opts.arg, "acorn") ? HOST_acorn
                 : !strcmp(opts.arg, "akai") ? HOST_akai
+                : !strcmp(opts.arg, "casio") ? HOST_casio
                 : !strcmp(opts.arg, "dec") ? HOST_dec
                 : !strcmp(opts.arg, "ensoniq") ? HOST_ensoniq
+                : !strcmp(opts.arg, "fluke") ? HOST_fluke
                 : !strcmp(opts.arg, "gem") ? HOST_gem
+                : !strcmp(opts.arg, "kaypro") ? HOST_kaypro
                 : !strcmp(opts.arg, "memotech") ? HOST_memotech
                 : !strcmp(opts.arg, "msx") ? HOST_msx
+                : !strcmp(opts.arg, "nascom") ? HOST_nascom
                 : !strcmp(opts.arg, "pc98") ? HOST_pc98
                 : !strcmp(opts.arg, "pc-dos") ? HOST_pc_dos
                 : !strcmp(opts.arg, "tandy-coco") ? HOST_tandy_coco
@@ -581,6 +673,10 @@ static void read_ff_cfg(void)
 
         case FFCFG_index_suppression:
             ff_cfg.index_suppression = !strcmp(opts.arg, "yes");
+            break;
+
+        case FFCFG_head_settle_ms:
+            ff_cfg.head_settle_ms = strtol(opts.arg, NULL, 10);
             break;
 
             /* STARTUP / INITIALISATION */
@@ -620,22 +716,50 @@ static void read_ff_cfg(void)
             ff_cfg.nav_loop = !strcmp(opts.arg, "yes");
             break;
 
-        case FFCFG_twobutton_action:
-            ff_cfg.twobutton_action =
-                !strcmp(opts.arg, "rotary") ? TWOBUTTON_rotary
-                : !strcmp(opts.arg, "rotary-fast") ? TWOBUTTON_rotary_fast
-                : !strcmp(opts.arg, "eject") ? TWOBUTTON_eject
-                : TWOBUTTON_zero;
+        case FFCFG_twobutton_action: {
+            char *p, *q;
+            ff_cfg.twobutton_action = TWOBUTTON_zero;
+            for (p = opts.arg; *p != '\0'; p = q) {
+                for (q = p; *q && *q != ','; q++)
+                    continue;
+                if (*q == ',')
+                    *q++ = '\0';
+                if (!strcmp(p, "reverse")) {
+                    ff_cfg.twobutton_action |= TWOBUTTON_reverse;
+                } else {
+                    ff_cfg.twobutton_action &= TWOBUTTON_reverse;
+                    ff_cfg.twobutton_action |=
+                        !strcmp(p, "rotary") ? TWOBUTTON_rotary
+                        : !strcmp(p, "rotary-fast") ? TWOBUTTON_rotary_fast
+                        : !strcmp(p, "eject") ? TWOBUTTON_eject
+                        : TWOBUTTON_zero;
+                }
+            }
             break;
+        }
 
-        case FFCFG_rotary:
-            ff_cfg.rotary =
-                !strcmp(opts.arg, "gray") ? ROT_quarter /* obsolete name */
-                : !strcmp(opts.arg, "quarter") ? ROT_quarter
-                : !strcmp(opts.arg, "half") ? ROT_half
-                : !strcmp(opts.arg, "none") ? ROT_none
-                : ROT_full;
+        case FFCFG_rotary: {
+            char *p, *q;
+            ff_cfg.rotary = ROT_full;
+            for (p = opts.arg; *p != '\0'; p = q) {
+                for (q = p; *q && *q != ','; q++)
+                    continue;
+                if (*q == ',')
+                    *q++ = '\0';
+                if (!strcmp(p, "reverse")) {
+                    ff_cfg.rotary |= ROT_reverse;
+                } else {
+                    ff_cfg.rotary &= ROT_reverse;
+                    ff_cfg.rotary |=
+                        !strcmp(p, "gray") ? ROT_quarter /* obsolete name */
+                        : !strcmp(p, "quarter") ? ROT_quarter
+                        : !strcmp(p, "half") ? ROT_half
+                        : !strcmp(p, "none") ? ROT_none
+                        : ROT_full;
+                }
+            }
             break;
+        }
 
             /* DISPLAY */
 
@@ -653,8 +777,9 @@ static void read_ff_cfg(void)
                     ff_cfg.display_type = DISPLAY_oled;
                 } else if (!strcmp(p, "rotate")) {
                     ff_cfg.display_type |= DISPLAY_rotate;
-                } else if (!strcmp(p, "narrow")) {
-                    ff_cfg.display_type |= DISPLAY_narrow;
+                } else if (!strncmp(p, "narrow", 6)) {
+                    ff_cfg.display_type |=
+                        (p[6] == 'e') ? DISPLAY_narrower : DISPLAY_narrow;
                 } else if (!strcmp(p, "sh1106")) {
                     ff_cfg.display_type |= DISPLAY_sh1106;
                 } else if ((r = strchr(p, 'x')) != NULL) {
@@ -662,8 +787,9 @@ static void read_ff_cfg(void)
                     *r++ = '\0';
                     w = strtol(p, NULL, 10);
                     h = strtol(r, NULL, 10);
-                    if ((ff_cfg.display_type & DISPLAY_oled) && (h == 64)) {
-                        ff_cfg.display_type |= DISPLAY_oled_64;
+                    if (ff_cfg.display_type & DISPLAY_oled) {
+                        if (h == 64)
+                            ff_cfg.display_type |= DISPLAY_oled_64;
                     } else if (ff_cfg.display_type & DISPLAY_lcd) {
                         ff_cfg.display_type |= DISPLAY_lcd_columns(w);
                     }
@@ -676,6 +802,10 @@ static void read_ff_cfg(void)
             ff_cfg.oled_font =
                 !strcmp(opts.arg, "6x13") ? FONT_6x13
                 : FONT_8x16;
+            break;
+
+        case FFCFG_oled_contrast:
+            ff_cfg.oled_contrast = strtol(opts.arg, NULL, 10);
             break;
 
         case FFCFG_display_off_secs:
@@ -751,6 +881,7 @@ static void process_ff_cfg_opts(const struct ff_cfg *old)
 
     /* oled-font, display-type: Reinitialise the display subsystem. */
     if ((ff_cfg.oled_font != old->oled_font)
+        || (ff_cfg.oled_contrast != old->oled_contrast)
         || (ff_cfg.display_type != old->display_type))
         system_reset(); /* hit it with a hammer */
 }
@@ -764,6 +895,7 @@ static void cfg_init(void)
     BYTE mode;
     FRESULT fr;
 
+    cfg.dirty_slot_nr = FALSE;
     cfg.hxc_mode = FALSE;
     cfg.ima_ej_flag = FALSE;
     cfg.slot_nr = cfg.depth = 0;
@@ -802,22 +934,20 @@ static void cfg_init(void)
         /* Startup mode: eject. */
         cfg.ejected = TRUE;
     }
-        
+
     F_close(&fs->file);
 
-    /* Indexed mode (DSKAxxxx.HFE) does not need AUTOBOOT.HFE. */
-    if (!strncmp("HXCFECFGV", hxc_cfg.signature, 9) && hxc_cfg.index_mode) {
-        memset(&cfg.autoboot, 0, sizeof(cfg.autoboot));
-        cfg.hxc_mode = TRUE;
-        goto out;
-    }
+    /* Slot 0 is a dummy image unless AUTOBOOT.HFE exists. */
+    memset(&cfg.autoboot, 0, sizeof(cfg.autoboot));
+    snprintf(cfg.autoboot.name, sizeof(cfg.autoboot.name), "(Empty)");
+    cfg.autoboot.firstCluster = ~0u; /* flag to dummy_open() */
 
     fr = F_try_open(&fs->file, "AUTOBOOT.HFE", FA_READ);
-    if (fr)
-        goto native_mode;
-    fatfs_to_short_slot(&cfg.autoboot, &fs->file, "AUTOBOOT.HFE");
-    cfg.autoboot.attributes |= AM_RDO; /* default read-only */
-    F_close(&fs->file);
+    if (!fr) {
+        fatfs_to_short_slot(&cfg.autoboot, &fs->file, "AUTOBOOT.HFE");
+        cfg.autoboot.attributes |= AM_RDO; /* default read-only */
+        F_close(&fs->file);
+    }
 
     cfg.hxc_mode = TRUE;
     goto out;
@@ -1009,7 +1139,7 @@ static void native_update(uint8_t slot_mode)
     if (fs->fp.fattrib & AM_DIR) {
         /* Leave the full pathname cached in fs->fp. */
         cfg.slot.attributes = fs->fp.fattrib;
-        snprintf(cfg.slot.name, sizeof(cfg.slot.name), "%s", fs->fp.fname);
+        snprintf(cfg.slot.name, sizeof(cfg.slot.name), "[%s]", fs->fp.fname);
     } else {
         F_open(&fs->file, fs->fp.fname, FA_READ);
         fs->file.obj.attr = fs->fp.fattrib;
@@ -1217,31 +1347,43 @@ indexed_mode:
                     uint16_t, cfg.max_slot_nr, idx);
             }
             F_closedir(&fs->dp);
+            if (!slot_valid(cfg.max_slot_nr))
+                F_die(FR_NO_DIRENTS);
         }
 
         /* Index mode: populate current slot. */
-        for (;;) {
-            snprintf(name, sizeof(name), "DSKA%04u.*", cfg.slot_nr);
-            F_findfirst(&fs->dp, &fs->fp, "", name);
-            F_closedir(&fs->dp);
-            /* Found a valid image? */
-            if (fs->fp.fname[0])
-                break;
-            /* Fall back to slot 0. If already there, bail with error. */
-            if (cfg.slot_nr == 0)
-                F_die(FR_BAD_IMAGE);
-            cfg.slot_nr = 0;
+        snprintf(name, sizeof(name), "DSKA%04u.*", cfg.slot_nr);
+        printk("[%s]\n", name);
+        F_findfirst(&fs->dp, &fs->fp, "", name);
+        F_closedir(&fs->dp);
+        if (fs->fp.fname[0]) {
+            /* Found a valid image. */
+            F_open(&fs->file, fs->fp.fname, FA_READ);
+            fs->file.obj.attr = fs->fp.fattrib;
+            fatfs_to_slot(&cfg.slot, &fs->file, fs->fp.fname);
+            F_close(&fs->file);
+        } else {
+            memset(&cfg.slot, 0, sizeof(cfg.slot));
         }
-        F_open(&fs->file, fs->fp.fname, FA_READ);
-        fs->file.obj.attr = fs->fp.fattrib;
-        fatfs_to_slot(&cfg.slot, &fs->file, fs->fp.fname);
-        F_close(&fs->file);
     }
 
     for (i = 0; i < sizeof(cfg.slot.type); i++)
         cfg.slot.type[i] = tolower(cfg.slot.type[i]);
 }
 
+/* Always updates cfg.slot info for current slot_nr. Additionally:
+ * Native (Direct Navigation):
+ *  READ_SLOT:  Update slot_map/max_slot_nr for current directory.
+ *  WRITE_SLOT: Update IMAGE_A.CFG based on cached fs->fp.fname.
+ * NAVMODE_indexed (FF-native indexed mode):
+ *  READ_SLOT:  Update slot_nr from IMAGE_A.CFG. Update slot_map/max_slot_nr.
+ *  WRITE_SLOT: Update IMAGE_A.CFG from slot_nr.
+ * HxC Indexed Mode:
+ *  READ_SLOT:  Update slot_nr from HXCSDFE.CFG. Update slot_map/max_slot_nr.
+ *  WRITE_SLOT: Update HXCSDFE.CFG from slot_nr.
+ * HxC Selector Mode:
+ *  READ_SLOT:  Update slot_nr/slot_map/max_slot_nr from HXCSDFE.CFG.
+ *  WRITE_SLOT: Update HXCSDFE.CFG from slot_nr. */
 static void cfg_update(uint8_t slot_mode)
 {
     if (cfg.hxc_mode)
@@ -1249,7 +1391,7 @@ static void cfg_update(uint8_t slot_mode)
     else
         native_update(slot_mode);
     if (!(cfg.slot.attributes & AM_DIR)
-        && (ff_cfg.write_protect || usbh_msc_readonly()))
+        && (ff_cfg.write_protect || volume_readonly()))
         cfg.slot.attributes |= AM_RDO;
 }
 
@@ -1259,6 +1401,7 @@ static bool_t choose_new_image(uint8_t init_b)
     uint8_t b, prev_b;
     time_t last_change = 0;
     int old_slot = cfg.slot_nr, i, changes = 0;
+    uint8_t twobutton_action = ff_cfg.twobutton_action & TWOBUTTON_mask;
 
     for (prev_b = 0, b = init_b;
          (b &= (B_LEFT|B_RIGHT)) != 0;
@@ -1269,7 +1412,7 @@ static bool_t choose_new_image(uint8_t init_b)
             time_t delay = time_ms(1000) / (changes + 1);
             if (delay < time_ms(50))
                 delay = time_ms(50);
-            if (ff_cfg.twobutton_action == TWOBUTTON_rotary_fast)
+            if (twobutton_action == TWOBUTTON_rotary_fast)
                 delay = time_ms(40);
             if (time_diff(last_change, time_now()) < delay)
                 continue;
@@ -1283,7 +1426,7 @@ static bool_t choose_new_image(uint8_t init_b)
 
         i = cfg.slot_nr;
         if (!(b ^ (B_LEFT|B_RIGHT))) {
-            if (ff_cfg.twobutton_action == TWOBUTTON_eject) {
+            if (twobutton_action == TWOBUTTON_eject) {
                 cfg.slot_nr = old_slot;
                 cfg.ejected = TRUE;
                 cfg_update(CFG_KEEP_SLOT_NR);
@@ -1291,8 +1434,8 @@ static bool_t choose_new_image(uint8_t init_b)
             }
             i = cfg.slot_nr = 0;
             cfg_update(CFG_KEEP_SLOT_NR);
-            if ((ff_cfg.twobutton_action == TWOBUTTON_rotary)
-                || (ff_cfg.twobutton_action == TWOBUTTON_rotary_fast)) {
+            if ((twobutton_action == TWOBUTTON_rotary)
+                || (twobutton_action == TWOBUTTON_rotary_fast)) {
                 /* Wait for button release, then update display, or
                  * immediately enter parent-dir (if we're in a subfolder). */
                 while (buttons)
@@ -1334,9 +1477,9 @@ static bool_t choose_new_image(uint8_t init_b)
     return FALSE;
 }
 
-static void assert_usbh_msc_connected(void)
+static void assert_volume_connected(void)
 {
-    if (!usbh_msc_connected() || cfg.usb_power_fault)
+    if (!volume_connected() || cfg.usb_power_fault)
         F_die(FR_DISK_ERR);
 }
 
@@ -1363,7 +1506,7 @@ static int run_floppy(void *_b)
             lcd_scroll_name();
         }
         canary_check();
-        assert_usbh_msc_connected();
+        assert_volume_connected();
         t_prev = t_now;
     }
 
@@ -1416,6 +1559,10 @@ static int floppy_main(void *unused)
         }
 
         if (cfg.slot.attributes & AM_DIR) {
+            if (cfg.hxc_mode) {
+                /* No directory support in HxC selector/indexed modes. */
+                F_die(FR_BAD_IMAGE);
+            }
             if (!strcmp(fs->fp.fname, "..")) {
                 if (cfg.depth == 0)
                     F_die(FR_BAD_IMAGECFG);
@@ -1453,16 +1600,25 @@ static int floppy_main(void *unused)
         } else {
             fres = F_call_cancellable(run_floppy, &b);
             floppy_cancel();
-            assert_usbh_msc_connected();
+            assert_volume_connected();
         }
 
         arena_init();
         fs = arena_alloc(sizeof(*fs));
 
+        if (cfg.dirty_slot_nr) {
+            cfg.dirty_slot_nr = FALSE;
+            if (!cfg.hxc_mode)
+                cfg_update(CFG_KEEP_SLOT_NR); /* get correct fs->fp */
+            cfg_update(CFG_WRITE_SLOT_NR);
+        }
+
         /* When an image is loaded, select button means eject. */
         if (fres || (b & B_SELECT)) {
             /* ** EJECT STATE ** */
             unsigned int wait;
+            bool_t twobutton_eject =
+                (ff_cfg.twobutton_action & TWOBUTTON_mask) == TWOBUTTON_eject;
             snprintf(msg, sizeof(msg), "EJECTED");
             switch (display_mode) {
             case DM_LED_7SEG:
@@ -1492,7 +1648,7 @@ static int floppy_main(void *unused)
                 toggle_wp:
                     wait = 0;
                     cfg.slot.attributes ^= AM_RDO;
-                    if (usbh_msc_readonly()) {
+                    if (volume_readonly()) {
                         /* Read-only filesystem: force AM_RDO always. */
                         cfg.slot.attributes |= AM_RDO;
                     }
@@ -1506,7 +1662,7 @@ static int floppy_main(void *unused)
             wait = 0;
             while ((b = buttons) == 0) {
                 /* Bail if USB disconnects. */
-                assert_usbh_msc_connected();
+                assert_volume_connected();
                 /* Update the display. */
                 delay_ms(1);
                 switch (display_mode) {
@@ -1531,7 +1687,7 @@ static int floppy_main(void *unused)
                     break;
                 }
             }
-            if (ff_cfg.twobutton_action == TWOBUTTON_eject) {
+            if (twobutton_eject) {
                 /* Wait 50ms for 2-button press. */
                 for (wait = 0; wait < 50; wait++) {
                     b = buttons;
@@ -1548,7 +1704,7 @@ static int floppy_main(void *unused)
                 wait = 0;
                 while (b & B_SELECT) {
                     b = buttons;
-                    if ((ff_cfg.twobutton_action == TWOBUTTON_eject) && b) {
+                    if (twobutton_eject && b) {
                         /* Wait for 2-button release. */
                         b = B_SELECT;
                     }
@@ -1561,9 +1717,11 @@ static int floppy_main(void *unused)
             }
         }
 
-        /* No buttons pressed: re-read config and carry on. */
+        /* No buttons pressed: we probably just exited D-A mode. */
         if (b == 0) {
-            cfg_update(CFG_READ_SLOT_NR);
+            /* If using HXCSDFE.CFG then re-read as it may have changed. */
+            if (cfg.hxc_mode && (ff_cfg.nav_mode != NAVMODE_indexed))
+                cfg_update(CFG_READ_SLOT_NR);
             continue;
         }
 
@@ -1597,7 +1755,7 @@ static int floppy_main(void *unused)
                 b = buttons;
                 if (b != 0)
                     break;
-                assert_usbh_msc_connected();
+                assert_volume_connected();
                 delay_ms(1);
                 lcd_scroll.ticks -= time_ms(1);
                 lcd_scroll_name();
@@ -1678,7 +1836,7 @@ static void banner(void)
         lcd_clear();
         lcd_write(0, 0, 0, "FlashFloppy");
         lcd_write(0, 1, 0, "v");
-        lcd_write(1, 1, 0, FW_VER);
+        lcd_write(1, 1, 0, fw_ver);
         lcd_on();
         break;
     }
@@ -1687,7 +1845,8 @@ static void banner(void)
 static void maybe_show_version(void)
 {
     uint8_t b, nb;
-    char *p, *np, msg[3];
+    const char *p, *np;
+    char msg[3];
     int len;
 
     /* LCD/OLED already displays version info in idle state. */
@@ -1703,7 +1862,7 @@ static void maybe_show_version(void)
         return;
 
     /* Iterate through the dotted sections of the version number. */
-    for (p = FW_VER; p != NULL; p = np ? np+1 : NULL) {
+    for (p = fw_ver; p != NULL; p = np ? np+1 : NULL) {
         np = strchr(p, '.');
         memset(msg, ' ', sizeof(msg));
         len = min_t(int, np ? np - p : strnlen(p, sizeof(msg)), sizeof(msg));
@@ -1723,8 +1882,8 @@ static void handle_errors(FRESULT fres)
     if (pwr) {
         printk("USB Power Fault detected!\n");
         snprintf(msg, sizeof(msg), "USB Power Fault");
-    } else if (usbh_msc_connected() && (fres != FR_OK)) {
-        printk("FATFS RETURN CODE: %u\n", fres);
+    } else if (volume_connected() && (fres != FR_OK)) {
+        printk("**Error %u\n", fres);
         snprintf(msg, sizeof(msg),
                  (display_mode == DM_LED_7SEG)
                  ? ((fres >= 30) ? "E%02u" : "F%02u")
@@ -1749,7 +1908,7 @@ static void handle_errors(FRESULT fres)
     /* Wait for buttons to be released, pressed and released again. */
     while (buttons)
         continue;
-    while (!buttons && (pwr || usbh_msc_connected()))
+    while (!buttons && (pwr || volume_connected()))
         continue;
     while (buttons)
         continue;
@@ -1761,6 +1920,12 @@ static void handle_errors(FRESULT fres)
 
 int main(void)
 {
+    static const char * const board_name[] = {
+        [BRDREV_Gotek_standard] = "Standard",
+        [BRDREV_Gotek_enhanced] = "Enhanced",
+        [BRDREV_Gotek_sd_card]  = "Enhanced + SD"
+    };
+
     FRESULT fres;
 
     /* Relocate DATA. Initialise BSS. */
@@ -1776,12 +1941,11 @@ int main(void)
     board_init();
     delay_ms(200); /* 5v settle */
 
-    printk("\n** FlashFloppy v%s for Gotek\n", FW_VER);
+    printk("\n** FlashFloppy v%s for Gotek\n", fw_ver);
     printk("** Keir Fraser <keir.xen@gmail.com>\n");
     printk("** https://github.com/keirf/FlashFloppy\n\n");
 
-    printk("Board: %s\n",
-           (board_id == BRDREV_Gotek_standard) ? "Standard" : "Enhanced");
+    printk("Board: %s\n", board_name[board_id]);
 
     speaker_init();
 
@@ -1790,6 +1954,20 @@ int main(void)
     floppy_init();
 
     display_init();
+
+    while (floppy_ribbon_is_reversed()) {
+        printk("** Error: Ribbon cable upside down?\n");
+        switch (display_mode) {
+        case DM_LED_7SEG:
+            led_7seg_write_string("RIB");
+            break;
+        case DM_LCD_1602:
+            lcd_write(0, 0, -1, "Ribbon Cable May");
+            lcd_write(0, 1, -1, "Be Upside Down? ");
+            lcd_on();
+            break;
+        }
+    }
 
     usbh_msc_init();
 

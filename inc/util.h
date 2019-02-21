@@ -9,10 +9,13 @@
  * See the file COPYING for more details, or visit <http://unlicense.org>.
  */
 
-#if FLASH_MEM_SIZE==0x40000
-#define FW_VER "0.9.27a:256KB"
+#ifdef FW_VER
 #else
-#define FW_VER "0.9.27a:128KB"
+#if FLASH_MEM_SIZE==0x40000
+#define FW_VER "1.0:256KB"
+#else
+#define FW_VER "1.0:128KB"
+#endif
 #endif
 
 #ifndef NDEBUG
@@ -78,9 +81,11 @@ int memcmp(const void *s1, const void *s2, size_t n);
 size_t strnlen(const char *s, size_t maxlen);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
+char *strcpy(char *dest, const char *src);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 int tolower(int c);
+int toupper(int c);
 int isspace(int c);
 
 long int strtol(const char *nptr, char **endptr, int base);
@@ -165,14 +170,23 @@ extern uint8_t lcd_columns, lcd_rows;
 void usbh_msc_init(void);
 void usbh_msc_buffer_set(uint8_t *buf);
 void usbh_msc_process(void);
-bool_t usbh_msc_connected(void);
-bool_t usbh_msc_readonly(void);
+bool_t usbh_msc_inserted(void);
+
+/* Navigation/UI frontend */
+uint16_t get_slot_nr(void);
+bool_t set_slot_nr(uint16_t slot_nr);
+int set_slot_by_name(const char *name, void *scratch);
 
 extern uint8_t board_id;
 
 /* Gotek board revisions */
 #define BRDREV_Gotek_standard 0xf
 #define BRDREV_Gotek_enhanced 0x0
+#define BRDREV_Gotek_sd_card  0x1
+#define gotek_enhanced() (board_id != BRDREV_Gotek_standard)
+
+/* Build info. */
+extern const char fw_ver[];
 
 /* Text/data/BSS address ranges. */
 extern char _stext[], _etext[];

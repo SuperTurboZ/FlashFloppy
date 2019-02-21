@@ -238,8 +238,8 @@ void floppy_cancel(void)
     /* Clear soft state. */
     timer_cancel(&index.timer);
     barrier(); /* cancel index.timer /then/ clear soft state */
-    drive.index_suppressed = FALSE;
-    drive.image = NULL;
+    drv->index_suppressed = FALSE;
+    drv->image = NULL;
     max_read_us = 0;
     image = NULL;
     dma_rd = dma_wr = NULL;
@@ -334,7 +334,7 @@ void floppy_init(void)
 
     board_floppy_init();
 
-    timer_init(&drive.step.timer, drive_step_timer, &drive);
+    timer_init(&drv->step.timer, drive_step_timer, drv);
 
     gpio_configure_pin(gpio_out, pin_02, GPO_bus);
     gpio_configure_pin(gpio_out, pin_08, GPO_bus);
@@ -413,7 +413,7 @@ void floppy_insert(unsigned int unit, struct slot *slot)
     /* Mount the image file. */
     image_open(image, slot);
     drv->image = image;
-    if (!image->handler->write_track || usbh_msc_readonly())
+    if (!image->handler->write_track || volume_readonly())
         slot->attributes |= AM_RDO;
     if (slot->attributes & AM_RDO) {
         printk("Image is R/O\n");
@@ -506,7 +506,7 @@ void floppy_insert(unsigned int unit, struct slot *slot)
 
 static unsigned int drive_calc_track(struct drive *drv)
 {
-    drv->nr_sides = (drv->cyl == 255) ? 1 : drv->image->nr_sides;
+    drv->nr_sides = (drv->cyl >= DA_FIRST_CYL) ? 1 : drv->image->nr_sides;
     return drv->cyl*2 + (drv->head & (drv->nr_sides - 1));
 }
 
@@ -706,7 +706,7 @@ static void floppy_sync_flux(void)
         /* IDX is suppressed: Wait for heads to settle.
          * When IDX is not suppressed, settle time is already accounted for in
          * dma_rd_handle()'s call to image_setup_track(). */
-        time_t step_settle = drv->step.start + time_ms(DRIVE_SETTLE_MS);
+        time_t step_settle = drv->step.start + time_ms(ff_cfg.head_settle_ms);
         int32_t delta = time_diff(time_now(), step_settle) - time_us(1);
         if (delta > time_ms(5))
             return; /* go do other work for a while */
@@ -757,7 +757,8 @@ static bool_t dma_rd_handle(struct drive *drv)
         int32_t delay = time_ms(10);
         /* Allow extra time if heads are settling. */
         if (drv->step.state & STEP_settling) {
-            time_t step_settle = drv->step.start + time_ms(DRIVE_SETTLE_MS);
+            time_t step_settle = drv->step.start
+                + time_ms(ff_cfg.head_settle_ms);
             int32_t delta = time_diff(time_now(), step_settle);
             delay = max_t(int32_t, delta, delay);
         }
@@ -774,8 +775,8 @@ static bool_t dma_rd_handle(struct drive *drv)
         /* Seek to the new track. */
         track = drive_calc_track(drv);
         read_start_pos *= SYSCLK_MHZ/STK_MHZ;
-        if ((track >= 510) && (drv->outp & m(outp_wrprot))
-            && !usbh_msc_readonly()) {
+        if ((track >= (DA_FIRST_CYL*2)) && (drv->outp & m(outp_wrprot))
+            && !volume_readonly()) {
             /* Remove write-protect when driven into D-A mode. */
             drive_change_output(drv, outp_wrprot, FALSE);
         }
@@ -935,10 +936,10 @@ static void drive_step_timer(void *_drv)
     case STEP_latched:
         speaker_pulse();
         if ((drv->cyl >= 84) && !drv->step.inward)
-            drv->cyl = 84; /* Fast step back from D-A cyl 255 */
+            drv->cyl = 84; /* Fast step back from D-A cyls */
         drv->cyl += drv->step.inward ? 1 : -1;
         timer_set(&drv->step.timer,
-                  drv->step.start + time_ms(DRIVE_SETTLE_MS));
+                  drv->step.start + time_ms(ff_cfg.head_settle_ms));
         if (drv->cyl == 0)
             drive_change_output(drv, outp_trk0, TRUE);
         /* New state last, as that lets hi-pri IRQ start another step. */

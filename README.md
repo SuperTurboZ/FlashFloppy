@@ -6,7 +6,7 @@ A retro floppy emulator for the ubiquitous Gotek hardware.
   - ADM, ADL, ADF, DSD, SSD (Acorn DFS and ADFS)
   - D81 (Commodore 64 1581)
   - DSK (Amstrad CPC, Spectrum +3, Sam Coupe, Microbee)
-  - FDI (NEC PC-98)
+  - FDI, HDM (NEC PC-98)
   - IMG, IMA, DSK (IBM MFM Raw Sector)
   - JVC, DSK (Tandy Color Computer 'CoCo')
   - MBD (Spectrum MB02)
@@ -19,12 +19,16 @@ A retro floppy emulator for the ubiquitous Gotek hardware.
   - VDK (Dragon)
   - HFE, HFEv3 (Universal)
 - Pre-configured track layouts for Raw Sector Images:
-  - Akai (S01, S20, S950)
+  - Akai (S01, S20, S950), Korg, SC (Prophet 3000)
+  - Casio (FZ-1)
   - DEC (RX33, RX50)
   - Ensoniq (ASR, TS, etc)
+  - Fluke (9100)
   - General Music (S2, S3, S2R)
+  - Kaypro
   - Memotech
   - MSX
+  - Nascom (1, 2)
   - NEC PC-98
   - UKNC, DVK (Soviet PDP-11)
   - IBM PC and many others

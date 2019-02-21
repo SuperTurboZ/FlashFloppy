@@ -9,8 +9,6 @@
  * See the file COPYING for more details, or visit <http://unlicense.org>.
  */
 
-#define DRIVE_SETTLE_MS 12
-
 #define FINTF_SHUGART     0
 #define FINTF_IBMPC       1
 #define FINTF_IBMPC_HDOUT 2
@@ -48,20 +46,22 @@ struct hfe_image {
 
 struct img_image {
     uint32_t trk_off, base_off;
-    uint16_t trk_sec;
+    uint16_t trk_sec, rd_sec_pos;
     uint16_t rpm;
     int32_t decode_pos;
+    uint16_t decode_data_pos, crc;
     uint8_t layout; /* LAYOUT_* */
     bool_t has_iam;
     uint8_t gap_2, gap_3, gap_4a;
     uint8_t post_crc_syncs;
     int8_t write_sector;
-    uint8_t sec_base, sec_map[64];
+    uint8_t sec_base[2], sec_map[64];
     uint8_t nr_sectors, sec_no;
     uint8_t interleave:4, skew:4;
     bool_t skew_cyls_only;
     uint16_t data_rate, gap_4;
-    uint32_t idx_sz, idam_sz, dam_sz;
+    uint32_t idx_sz, idam_sz;
+    uint16_t dam_sz_pre, dam_sz_post;
 };
 
 struct dsk_image {
@@ -82,6 +82,7 @@ struct directaccess {
     struct da_status_sector dass;
     int32_t decode_pos;
     uint16_t trk_sec;
+    uint16_t idx_sz, idam_sz, dam_sz;
 };
 
 struct image_buf {
@@ -140,6 +141,8 @@ struct image {
         struct dsk_image dsk;
         struct directaccess da;
     };
+
+    const struct slot *slot;
 };
 
 static inline struct write *get_write(struct image *im, uint16_t idx)
@@ -156,6 +159,12 @@ struct image_handler {
     uint16_t (*rdata_flux)(struct image *im, uint16_t *tbuf, uint16_t nr);
     bool_t (*write_track)(struct image *im);
 };
+
+/* List of supported image types. */
+extern const struct image_type {
+    char ext[8];
+    const struct image_handler *handler;
+} image_type[];
 
 /* Is given file valid to open as an image? */
 bool_t image_valid(FILINFO *fp);
@@ -195,8 +204,13 @@ extern const uint16_t mfmtab[];
 static inline uint16_t bintomfm(uint8_t x) { return mfmtab[x]; }
 uint8_t mfmtobin(uint16_t x);
 
+/* FM conversion. */
+#define FM_SYNC_CLK 0xc7
+uint16_t fm_sync(uint8_t dat, uint8_t clk);
+
 /* External API. */
 void floppy_init(void);
+bool_t floppy_ribbon_is_reversed(void);
 void floppy_insert(unsigned int unit, struct slot *slot);
 void floppy_cancel(void);
 bool_t floppy_handle(void); /* TRUE -> re-read config file */
